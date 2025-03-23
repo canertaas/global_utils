@@ -6,6 +6,7 @@ from scipy import stats
 import missingno as msno
 from sklearn.preprocessing import StandardScaler
 import warnings
+from ..config import random_state
 warnings.filterwarnings('ignore')
 
 class DatasetAnalyzer:
@@ -146,8 +147,16 @@ class DatasetAnalyzer:
         plt.figure(figsize=(15, n_rows * 5))
         for i, col in enumerate(self.numerical_cols):
             plt.subplot(n_rows, n_cols, i+1)
-            sns.boxplot(y=self.df[col])
-            plt.title(f'Boxplot of {col}')
+            
+            # If target column exists and has few unique values, separate boxplots by target
+            if self.target_col and self.df[self.target_col].nunique() <= 10:
+                sns.boxplot(x=self.target_col, y=col, data=self.df)
+                plt.title(f'Boxplot of {col} by {self.target_col}')
+                plt.xticks(rotation=45)
+            else:
+                sns.boxplot(y=self.df[col])
+                plt.title(f'Boxplot of {col}')
+                
             plt.tight_layout()
         plt.show()
     
@@ -168,7 +177,7 @@ class DatasetAnalyzer:
             sample = self.df[col].dropna()
             # Limit sample size for Shapiro-Wilk test
             if len(sample) > 5000:
-                sample = sample.sample(5000, random_state=42)
+                sample = sample.sample(5000, random_state=random_state)
             
             stat, p_value = stats.shapiro(sample)
             is_normal = p_value > 0.05
@@ -186,8 +195,19 @@ class DatasetAnalyzer:
             
             # Plot histogram with KDE
             plt.subplot(n_rows, n_cols, i+1)
-            sns.histplot(self.df[col].dropna(), kde=True)
-            plt.title(f'Distribution of {col}')
+            
+            # If target column exists and has few unique values, separate histograms by target
+            if self.target_col and self.df[self.target_col].nunique() <= 5:
+                for target_value in self.df[self.target_col].unique():
+                    subset = self.df[self.df[self.target_col] == target_value]
+                    sns.histplot(subset[col].dropna(), kde=True, 
+                                label=f'{self.target_col}={target_value}', alpha=0.5)
+                plt.legend()
+                plt.title(f'Distribution of {col} by {self.target_col}')
+            else:
+                sns.histplot(self.df[col].dropna(), kde=True)
+                plt.title(f'Distribution of {col}')
+                
             plt.tight_layout()
         plt.show()
         
@@ -211,7 +231,14 @@ class DatasetAnalyzer:
             return
         
         # Correlation matrix
-        corr_matrix = self.df[self.numerical_cols].corr()
+        # Include target column in correlation analysis if it's numerical
+        columns_for_corr = self.numerical_cols.copy()
+        if self.target_col and self.target_col not in columns_for_corr:
+            if self.df[self.target_col].dtype in ['int64', 'float64'] or pd.api.types.is_numeric_dtype(self.df[self.target_col]):
+                columns_for_corr.append(self.target_col)
+                print(f"Including target column '{self.target_col}' in correlation analysis.")
+        
+        corr_matrix = self.df[columns_for_corr].corr()
         
         # Visualize correlation matrix
         plt.figure(figsize=(12, 10))
@@ -221,6 +248,21 @@ class DatasetAnalyzer:
         plt.title('Correlation Matrix')
         plt.tight_layout()
         plt.show()
+        
+        # If target column exists and is numeric, show correlations with target
+        if self.target_col and self.target_col in columns_for_corr:
+            target_corrs = corr_matrix[self.target_col].drop(self.target_col).sort_values(ascending=False)
+            
+            print(f"\nFeature Correlations with Target ({self.target_col}):")
+            print(target_corrs)
+            
+            # Visualize correlations with target
+            plt.figure(figsize=(12, 8))
+            sns.barplot(x=target_corrs.values, y=target_corrs.index)
+            plt.title(f'Feature Correlations with {self.target_col}')
+            plt.axvline(x=0, color='black', linestyle='-', linewidth=0.5)
+            plt.tight_layout()
+            plt.show()
         
         # Find highly correlated features
         high_corr_threshold = 0.7
@@ -296,9 +338,9 @@ class DatasetAnalyzer:
             
             # Choose model based on target type
             if self.df[self.target_col].nunique() < 20:  # Classification
-                model = RandomForestClassifier(n_estimators=100, random_state=42)
+                model = RandomForestClassifier(n_estimators=100, random_state=random_state)
             else:  # Regression
-                model = RandomForestRegressor(n_estimators=100, random_state=42)
+                model = RandomForestRegressor(n_estimators=100, random_state=random_state)
             
             # Fit model
             model.fit(X, y)

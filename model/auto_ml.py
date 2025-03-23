@@ -12,6 +12,7 @@ import pycaret.classification as pyc
 from metric.classification_metric import ModelMetrics
 from validation.validation import Validation
 from model.utils import ModelUtils
+from ..config import random_state
 warnings.filterwarnings('ignore')
 
 class AutoMLBlender:
@@ -29,13 +30,13 @@ class AutoMLBlender:
     - Model persistence
     """
     
-    def __init__(self, random_state=42, n_jobs=-1):
+    def __init__(self, random_state=random_state, n_jobs=-1):
         """
         Initialize the AutoML blender.
         
         Parameters:
         -----------
-        random_state : int, default=42
+        random_state : int, default from config
             Random seed for reproducibility
         n_jobs : int, default=-1
             Number of jobs to run in parallel (-1 means using all processors)

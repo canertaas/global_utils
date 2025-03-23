@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.model_selection import (train_test_split, KFold, StratifiedKFold, GroupKFold, 
                                      TimeSeriesSplit, cross_validate)
+from ..config import random_state as default_random_state
 
 class Validation:
     """
@@ -20,7 +21,7 @@ class Validation:
     """
     
     @staticmethod
-    def train_test_split(X, y, test_size=0.2, random_state=None, stratify=None):
+    def train_test_split(X, y, test_size=0.2, random_state=default_random_state, stratify=None):
         """
         Split the data into training and testing sets.
         
@@ -45,7 +46,7 @@ class Validation:
         return train_test_split(X, y, test_size=test_size, random_state=random_state, stratify=stratify)
     
     @staticmethod
-    def train_val_test_split(X, y, val_size=0.2, test_size=0.2, random_state=None, stratify=None):
+    def train_val_test_split(X, y, val_size=0.2, test_size=0.2, random_state=default_random_state, stratify=None):
         """
         Split the data into training, validation, and testing sets.
         
@@ -88,7 +89,7 @@ class Validation:
         return X_train, X_val, X_test, y_train, y_val, y_test
     
     @staticmethod
-    def group_train_test_split(X, y, groups, test_size=0.2, random_state=None):
+    def group_train_test_split(X, y, groups, test_size=0.2, random_state=default_random_state):
         """
         Split the data into training and testing sets based on groups.
         
@@ -163,7 +164,7 @@ class Validation:
         return X_train, X_test, y_train, y_test
     
     @staticmethod
-    def k_fold_cross_validation(X, y, model, n_splits=5, random_state=None, scoring='accuracy'):
+    def k_fold_cross_validation(X, y, model, n_splits=5, random_state=default_random_state, scoring='accuracy'):
         """
         Perform K-Fold cross-validation.
         
@@ -199,7 +200,7 @@ class Validation:
         return cv_results
     
     @staticmethod
-    def stratified_k_fold_cross_validation(X, y, model, n_splits=5, random_state=None, scoring='accuracy'):
+    def stratified_k_fold_cross_validation(X, y, model, n_splits=5, random_state=default_random_state, scoring='accuracy'):
         """
         Perform Stratified K-Fold cross-validation.
         
