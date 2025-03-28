@@ -69,7 +69,7 @@ class DataTransformer:
                 values = result[col]
                 if handle_zeros:
                     values = values + epsilon
-                result[col] = np.log(values) / np.log(base)
+                result[col+'log'] = np.log(values) / np.log(base)
             
             self.transformation_history.append(('log', columns, {'base': base}))
             return result
@@ -90,7 +90,7 @@ class DataTransformer:
             
             result = data.copy()
             for col in columns:
-                result[col] = np.sqrt(np.abs(result[col])) * np.sign(result[col])
+                result[col+'sqrt'] = np.sqrt(np.abs(result[col])) * np.sign(result[col])
             
             self.transformation_history.append(('sqrt', columns, {}))
             return result
@@ -116,7 +116,7 @@ class DataTransformer:
                     shift = abs(min_val) + 1
                     result[col] = result[col] + shift
                 
-                result[col] = transformer.fit_transform(result[col].values.reshape(-1, 1)).ravel()
+                result[col+'box_cox'] = transformer.fit_transform(result[col].values.reshape(-1, 1)).ravel()
             
             self.transformation_history.append(('box-cox', columns, {}))
             return result
@@ -142,7 +142,7 @@ class DataTransformer:
             
             result = data.copy()
             for col in columns:
-                result[col] = transformer.fit_transform(result[col].values.reshape(-1, 1)).ravel()
+                result[col+'yeo_johnson'] = transformer.fit_transform(result[col].values.reshape(-1, 1)).ravel()
             
             self.transformation_history.append(('yeo-johnson', columns, {}))
             return result

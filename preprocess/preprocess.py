@@ -23,7 +23,7 @@ class DataPreprocessor:
     def set_dataframe(self, df):
         """Set the dataframe to preprocess."""
         self.df = df.copy()
-        return self
+        return self.df
     
     def create_na_indicators(self, columns=None):
         """
@@ -54,7 +54,7 @@ class DataPreprocessor:
                 self.na_columns.append(na_col_name)
                 
         self.preprocessing_steps.append("Created NA indicators")
-        return self
+        return self.df
     
     def fill_missing_values(self, strategy='mean', columns=None, fill_value=None):
         """
@@ -97,7 +97,7 @@ class DataPreprocessor:
                     raise ValueError(f"Unknown strategy: {strategy}")
         
         self.preprocessing_steps.append(f"Filled missing values using {strategy}")
-        return self
+        return self.df
     
     def drop_columns(self, columns):
         """Drop specified columns from the dataframe."""
@@ -106,7 +106,7 @@ class DataPreprocessor:
         
         self.df = self.df.drop(columns=columns, errors='ignore')
         self.preprocessing_steps.append(f"Dropped columns: {columns}")
-        return self
+        return self.df
     
     def encode_categorical(self, columns=None, method='one-hot', random_state=random_state):
         """
@@ -142,7 +142,7 @@ class DataPreprocessor:
         else:
             raise ValueError(f"Unknown encoding method: {method}")
         
-        return self
+        return self.df
     
     def get_processed_data(self):
         """Return the processed dataframe."""

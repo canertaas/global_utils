@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.model_selection import (train_test_split, KFold, StratifiedKFold, GroupKFold, 
-                                     TimeSeriesSplit, cross_validate)
+                                     TimeSeriesSplit, cross_validate, cross_val_score)
 from ..config import random_state as default_random_state
 
 class Validation:
@@ -200,40 +200,57 @@ class Validation:
         return cv_results
     
     @staticmethod
-    def stratified_k_fold_cross_validation(X, y, model, n_splits=5, random_state=default_random_state, scoring='accuracy'):
+    def get_stratified_k_fold(n_splits=5, random_state=None):
         """
-        Perform Stratified K-Fold cross-validation.
+        Returns a StratifiedKFold cross-validator object for use with RandomizedSearchCV
         
         Parameters:
         -----------
-        X : array-like
-            Features
-        y : array-like
-            Target variable
-        model : estimator object
-            The model to evaluate
         n_splits : int, default=5
             Number of folds
         random_state : int, default=None
-            Controls the randomness of the CV splitter
-        scoring : str or callable, default='accuracy'
-            Scoring metric to use
+            Random seed for reproducibility
+            
+        Returns:
+        --------
+        cv : StratifiedKFold
+            Cross-validator object
+        """
+        return StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+    
+    @staticmethod
+    def stratified_k_fold_cross_validation(model, X, y, n_splits=5, random_state=None, scoring=None):
+        """
+        Perform stratified k-fold cross-validation
+        
+        Parameters:
+        -----------
+        model : estimator
+            The model to evaluate
+        X : array-like
+            Features
+        y : array-like
+            Target
+        n_splits : int, default=5
+            Number of folds
+        random_state : int, default=None
+            Random seed for reproducibility
+        scoring : str, default=None
+            Scoring metric
             
         Returns:
         --------
         dict
-            Cross-validation results
+            Dictionary with cross-validation results
         """
-        # Create StratifiedKFold object
-        skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+        cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+        scores = cross_val_score(model, X, y, cv=cv, scoring=scoring)
         
-        # Perform cross-validation
-        cv_results = cross_validate(
-            model, X, y, cv=skf, scoring=scoring, 
-            return_train_score=True, return_estimator=True
-        )
-        
-        return cv_results
+        return {
+            'test_score': scores,
+            'mean_test_score': scores.mean(),
+            'std_test_score': scores.std()
+        }
     
     @staticmethod
     def group_k_fold_cross_validation(X, y, groups, model, n_splits=5, scoring='accuracy'):

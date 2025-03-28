@@ -35,6 +35,7 @@ class PCAApplication:
         self.standardize = standardize
         self.scaler = StandardScaler() if standardize else None
         self.pca = None
+        self.is_fitted = False
         self.feature_names = None
         self.transformed_feature_names = None
         
@@ -79,6 +80,7 @@ class PCAApplication:
             f'PC{i+1}' for i in range(self.pca.n_components_)
         ]
         
+        self.is_fitted = True
         return self
     
     def transform(self, X, columns=None):
@@ -98,7 +100,7 @@ class PCAApplication:
         pandas.DataFrame
             Transformed features
         """
-        if self.pca is None:
+        if not self.is_fitted:
             raise ValueError("PCA not fitted. Call fit() first.")
         
         # Handle column selection
@@ -148,7 +150,7 @@ class PCAApplication:
         pandas.DataFrame
             DataFrame with component names and their explained variance ratios
         """
-        if self.pca is None:
+        if not self.is_fitted:
             raise ValueError("PCA not fitted. Call fit() first.")
         
         return pd.DataFrame({
@@ -166,7 +168,7 @@ class PCAApplication:
         figsize : tuple, default=(12, 6)
             Figure size
         """
-        if self.pca is None:
+        if not self.is_fitted:
             raise ValueError("PCA not fitted. Call fit() first.")
         
         variance_df = self.get_explained_variance_ratio()
@@ -210,7 +212,7 @@ class PCAApplication:
         pandas.DataFrame
             DataFrame with feature loadings for each component
         """
-        if self.pca is None:
+        if not self.is_fitted:
             raise ValueError("PCA not fitted. Call fit() first.")
         
         loadings = pd.DataFrame(
@@ -249,21 +251,36 @@ class PCAApplication:
         plt.tight_layout()
         plt.show()
     
-    def plot_2d_projection(self, X, y=None, components=(0, 1)):
+    def plot_2d_projection(self, X, y=None, components=None):
         """
-        Plot 2D projection of the data using specified components.
+        Plot 2D projection of the data.
         
         Parameters:
         -----------
         X : array-like or pandas.DataFrame
             Features to project
         y : array-like, default=None
-            Target variable for coloring points
-        components : tuple, default=(0, 1)
-            Which components to use for projection (zero-based)
+            Target variable for coloring
+        components : list, default=None
+            List of two component indices to plot. If None, uses first two components.
         """
-        # Transform data
-        X_transformed = self.transform(X)
+        if not self.is_fitted:
+            raise ValueError("PCA not fitted. Call fit() first.")
+        
+        # Check if we have enough components for 2D projection
+        if self.pca.n_components_ < 2:
+            print("Warning: Cannot create 2D projection with less than 2 components.")
+            return
+        
+        # Transform data if not already transformed
+        if isinstance(X, pd.DataFrame) and X.columns[0] != self.transformed_feature_names[0]:
+            X_transformed = self.transform(X)
+        else:
+            X_transformed = X
+        
+        # Set default components if not specified
+        if components is None:
+            components = [0, 1]
         
         plt.figure(figsize=(10, 8))
         
@@ -271,8 +288,7 @@ class PCAApplication:
             scatter = plt.scatter(
                 X_transformed.iloc[:, components[0]],
                 X_transformed.iloc[:, components[1]],
-                c=y,
-                cmap='viridis'
+                c=y
             )
             plt.colorbar(scatter)
         else:
@@ -283,8 +299,8 @@ class PCAApplication:
         
         plt.xlabel(f'{self.transformed_feature_names[components[0]]}')
         plt.ylabel(f'{self.transformed_feature_names[components[1]]}')
-        plt.title('2D PCA Projection')
-        plt.grid(True)
+        plt.title('2D Projection of PCA Components')
+        plt.tight_layout()
         plt.show()
     
     def get_optimal_components(self, variance_threshold=0.95):
@@ -301,7 +317,7 @@ class PCAApplication:
         int
             Optimal number of components
         """
-        if self.pca is None:
+        if not self.is_fitted:
             raise ValueError("PCA not fitted. Call fit() first.")
         
         cumsum = np.cumsum(self.pca.explained_variance_ratio_)
@@ -325,7 +341,7 @@ class PCAApplication:
         float
             Reconstruction error
         """
-        if self.pca is None:
+        if not self.is_fitted:
             raise ValueError("PCA not fitted. Call fit() first.")
         
         # Handle column selection
@@ -347,85 +363,116 @@ class PCAApplication:
         
         return reconstruction_error
 
-def pca_runner(data, target_col=None, n_components=None, standardize=True, variance_threshold=0.95):
-    """
-    Runner function to perform PCA analysis on a dataset.
-    
-    Parameters:
-    -----------
-    data : pandas.DataFrame
-        Input data containing features
-    target_col : str, default=None
-        Name of target column if exists
-    n_components : int or float, default=None
-        Number of components to keep
-    standardize : bool, default=True
-        Whether to standardize the features
-    variance_threshold : float, default=0.95
-        Threshold for optimal number of components
+    def pca_runner(self, data, target_col=None, variance_threshold=0.95):
+        """
+        Runner function to perform PCA analysis on a dataset.
         
-    Returns:
-    --------
-    dict
-        Dictionary containing:
-        - transformed_data: PCA transformed features
-        - pca_model: Fitted PCA model
-        - variance_ratios: Explained variance ratios
-        - optimal_components: Optimal number of components
-        - reconstruction_error: Reconstruction error
-    """
-    # Separate features and target
-    if target_col is not None and target_col in data.columns:
-        X = data.drop(columns=[target_col])
-        y = data[target_col]
-    else:
-        X = data
-        y = None
-    
-    # Initialize and fit PCA
-    pca_app = PCAApplication(n_components=n_components, standardize=standardize)
-    
-    # Transform data
-    X_transformed = pca_app.fit_transform(X)
-    
-    # Get variance ratios
-    variance_df = pca_app.get_explained_variance_ratio()
-    
-    # Get optimal components
-    optimal_n = pca_app.get_optimal_components(variance_threshold)
-    
-    # Calculate reconstruction error
-    error = pca_app.get_reconstruction_error(X)
-    
-    # Create visualizations
-    print("\n=== PCA Analysis Results ===")
-    print(f"Original features: {X.shape[1]}")
-    print(f"Components kept: {X_transformed.shape[1]}")
-    print(f"Optimal components for {variance_threshold*100}% variance: {optimal_n}")
-    print(f"Reconstruction error: {error:.6f}")
-    print("\nExplained Variance Ratios:")
-    print(variance_df)
-    
-    # Plot results
-    pca_app.plot_explained_variance()
-    pca_app.plot_component_loadings()
-    
-    if y is not None:
-        print("\nPlotting 2D projection with target variable...")
-        pca_app.plot_2d_projection(X, y)
-    else:
-        print("\nPlotting 2D projection...")
-        pca_app.plot_2d_projection(X)
-    
-    # Return results
-    results = {
-        'transformed_data': X_transformed,
-        'pca_model': pca_app,
-        'variance_ratios': variance_df,
-        'optimal_components': optimal_n,
-        'reconstruction_error': error
-    }
-    
-    return results
+        Parameters:
+        -----------
+        data : pandas.DataFrame
+            Input data containing features
+        target_col : str, default=None
+            Name of target column if exists
+        variance_threshold : float, default=0.95
+            Threshold for optimal number of components
+            
+        Returns:
+        --------
+        dict
+            Dictionary containing:
+            - transformed_data: PCA transformed features
+            - pca_model: Fitted PCA model
+            - scaler: Fitted StandardScaler (if standardize=True)
+            - feature_names: Original feature names
+            - component_names: PCA component names
+            - variance_ratios: Explained variance ratios
+            - optimal_components: Optimal number of components
+            - reconstruction_error: Reconstruction error
+            - fitted_models: Dictionary containing fitted PCA and scaler objects
+        """
+        # Separate features and target
+        if target_col is not None and target_col in data.columns:
+            X = data.drop(columns=[target_col])
+            y = data[target_col]
+        else:
+            X = data
+            y = None
+        
+        # Store original feature names
+        feature_names = X.columns.tolist() if isinstance(X, pd.DataFrame) else None
+        
+        # Transform data
+        X_transformed = self.fit_transform(X)
+        
+        # Create component names
+        n_components = X_transformed.shape[1]
+        component_names = [f"PC{i+1}" for i in range(n_components)]
+        
+        # Convert transformed data to DataFrame if input was DataFrame
+        if isinstance(X, pd.DataFrame):
+            X_transformed = pd.DataFrame(X_transformed, columns=component_names, index=X.index)
+        
+        # Get variance ratios
+        variance_df = self.get_explained_variance_ratio()
+        
+        # Get optimal components based on variance threshold
+        optimal_n = self.get_optimal_components(variance_threshold)
+        
+        # Print comparison if optimal_n is different from current n_components
+        if optimal_n != n_components:
+            print(f"\nNote: Current components ({n_components}) differ from optimal components ({optimal_n})")
+            print(f"Consider reinitializing with n_components={optimal_n} for optimal variance retention")
+        
+        # Calculate reconstruction error
+        error = self.get_reconstruction_error(X)
+        
+        # Create visualizations
+        print("\n=== PCA Analysis Results ===")
+        print(f"Original features: {X.shape[1]}")
+        print(f"Components kept: {n_components}")
+        print(f"Explained variance with current components: {self.pca.explained_variance_ratio_.sum():.4f}")
+        print(f"Optimal components for {variance_threshold*100}% variance: {optimal_n}")
+        print(f"Reconstruction error: {error:.6f}")
+        print("\nExplained Variance Ratios:")
+        print(variance_df)
+        
+        # Plot results
+        self.plot_explained_variance()
+        self.plot_component_loadings()
+        
+        # 2D projection sadece 2 veya daha fazla bileşen varsa yapılacak
+        if n_components >= 2:
+            if y is not None:
+                print("\nPlotting 2D projection with target variable...")
+                self.plot_2d_projection(X, y)
+            else:
+                print("\nPlotting 2D projection...")
+                self.plot_2d_projection(X)
+        else:
+            print("\nSkipping 2D projection: Not enough components")
+        
+        # Store fitted models for later use
+        fitted_models = {
+            'pca': self.pca,
+            'scaler': self.scaler if self.standardize else None
+        }
+        
+        # Return results
+        results = {
+            'transformed_data': X_transformed,
+            'pca_model': self,
+            'scaler': self.scaler if self.standardize else None,
+            'feature_names': feature_names,
+            'component_names': component_names,
+            'variance_ratios': variance_df,
+            'optimal_components': optimal_n,
+            'reconstruction_error': error,
+            'fitted_models': fitted_models,
+            'current_n_components': n_components,
+            'total_variance_explained': self.pca.explained_variance_ratio_.sum()
+        }
+        
+        return results
+
 
 
