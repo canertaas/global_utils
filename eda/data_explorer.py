@@ -4,7 +4,6 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import stats
 import missingno as msno
-from sklearn.preprocessing import StandardScaler
 import warnings
 from ..config import random_state
 warnings.filterwarnings('ignore')
@@ -316,7 +315,7 @@ class DatasetAnalyzer:
                         plt.tight_layout()
                         plt.show()
             else:
-                print(f"Top 10 categories:")
+                print("Top 10 categories:")
                 print(value_counts.head(10))
                 print(f"(Showing 10/{unique_count} categories)")
     
@@ -328,6 +327,8 @@ class DatasetAnalyzer:
         
         try:
             from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+            from sklearn.linear_model import Ridge
+            from sklearn.preprocessing import StandardScaler
             
             # Prepare data
             X = self.df.drop(columns=[self.target_col])
@@ -336,36 +337,189 @@ class DatasetAnalyzer:
             # Handle categorical features
             X = pd.get_dummies(X, drop_first=True)
             
-            # Choose model based on target type
-            if self.df[self.target_col].nunique() < 20:  # Classification
-                model = RandomForestClassifier(n_estimators=100, random_state=random_state)
-            else:  # Regression
-                model = RandomForestRegressor(n_estimators=100, random_state=random_state)
+            print("\nFeature Importance Analysis using Multiple Models:")
             
-            # Fit model
-            model.fit(X, y)
+            # Dictionary to store importance from all models
+            all_importance = {}
+            
+            # 1. Tree-based model importance
+            print("\n1. Tree-based Model Importance")
+            if self.df[self.target_col].nunique() < 20:  # Classification
+                tree_model = RandomForestClassifier(n_estimators=100, random_state=random_state)
+                model_type = "classification"
+            else:  # Regression
+                tree_model = RandomForestRegressor(n_estimators=100, random_state=random_state)
+                model_type = "regression"
+            
+            # Fit tree-based model
+            tree_model.fit(X, y)
             
             # Get feature importance
-            importance = model.feature_importances_
+            tree_importance = tree_model.feature_importances_
             
             # Create DataFrame for visualization
-            feature_importance = pd.DataFrame({
+            tree_importance_df = pd.DataFrame({
                 'Feature': X.columns,
-                'Importance': importance
+                'Importance': tree_importance
             }).sort_values('Importance', ascending=False)
             
-            print("Feature Importance:")
-            print(feature_importance.head(20))
+            print("Top 20 features (Tree-based model):")
+            print(tree_importance_df.head(20))
             
-            # Visualize feature importance
+            # Store in all_importance
+            all_importance['Tree-based'] = {feature: importance for feature, importance in zip(X.columns, tree_importance)}
+            
+            # 2. Linear model importance
+            print("\n2. Linear Model Importance")
+            
+            # Scale features for linear model
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X)
+            
+            # Choose appropriate linear model
+            if model_type == "classification":
+                if self.df[self.target_col].nunique() == 2:  # Binary classification
+                    from sklearn.linear_model import LogisticRegression
+                    linear_model = LogisticRegression(penalty='l2', C=1.0, solver='liblinear', random_state=random_state)
+                    print("Using Logistic Regression (binary classification)")
+                else:  # Multi-class classification
+                    from sklearn.linear_model import LogisticRegression
+                    linear_model = LogisticRegression(penalty='l2', C=1.0, solver='saga', multi_class='multinomial', random_state=random_state)
+                    print("Using Logistic Regression (multi-class classification)")
+            else:  # Regression
+                linear_model = Ridge(alpha=1.0, random_state=random_state)
+                print("Using Ridge Regression")
+            
+            try:
+                # Fit linear model
+                linear_model.fit(X_scaled, y)
+                
+                # Get feature importance (coefficients)
+                if hasattr(linear_model, 'coef_'):
+                    if len(linear_model.coef_.shape) > 1:  # Multi-class
+                        # Average absolute coefficient across classes
+                        linear_importance = np.mean(np.abs(linear_model.coef_), axis=0)
+                    else:  # Binary class or regression
+                        linear_importance = np.abs(linear_model.coef_)
+                else:
+                    raise AttributeError("Model does not have coef_ attribute")
+                
+                # Create DataFrame for visualization
+                linear_importance_df = pd.DataFrame({
+                    'Feature': X.columns,
+                    'Importance': linear_importance
+                }).sort_values('Importance', ascending=False)
+                
+                print("Top 20 features (Linear model):")
+                print(linear_importance_df.head(20))
+                
+                # Store in all_importance
+                all_importance['Linear'] = {feature: importance for feature, importance in zip(X.columns, linear_importance)}
+                
+                # Visualize linear model importance
+                plt.figure(figsize=(12, 8))
+                sns.barplot(x='Importance', y='Feature', data=linear_importance_df.head(20))
+                plt.title('Feature Importance (Linear Model)')
+                plt.tight_layout()
+                plt.show()
+                
+            except Exception as e:
+                print(f"Error fitting linear model: {e}")
+                print("Skipping linear model importance analysis.")
+            
+            # Visualize tree-based model importance
             plt.figure(figsize=(12, 8))
-            sns.barplot(x='Importance', y='Feature', data=feature_importance.head(20))
-            plt.title('Feature Importance')
+            sns.barplot(x='Importance', y='Feature', data=tree_importance_df.head(20))
+            plt.title('Feature Importance (Tree-based Model)')
             plt.tight_layout()
             plt.show()
             
+            # 3. Compare importance rankings between models (if both available)
+            if len(all_importance) > 1:
+                print("\n3. Comparison of Feature Importance Rankings")
+                
+                # Get ranks for each model
+                ranks = {}
+                for model_name, importance in all_importance.items():
+                    # Sort features by importance and get rankings
+                    sorted_features = sorted(importance.items(), key=lambda x: x[1], reverse=True)
+                    ranks[model_name] = {feature: idx+1 for idx, (feature, _) in enumerate(sorted_features)}
+                
+                # Create comparison DataFrame
+                comparison_data = []
+                for feature in X.columns:
+                    feature_data = {'Feature': feature}
+                    for model_name in all_importance.keys():
+                        feature_data[f'{model_name} Rank'] = ranks[model_name].get(feature, np.nan)
+                        feature_data[f'{model_name} Importance'] = all_importance[model_name].get(feature, np.nan)
+                    comparison_data.append(feature_data)
+                
+                comparison_df = pd.DataFrame(comparison_data)
+                
+                # Calculate rank difference for the top features
+                if 'Tree-based Rank' in comparison_df.columns and 'Linear Rank' in comparison_df.columns:
+                    comparison_df['Rank Difference'] = np.abs(comparison_df['Tree-based Rank'] - comparison_df['Linear Rank'])
+                    
+                    # Sort by average rank
+                    comparison_df['Average Rank'] = (comparison_df['Tree-based Rank'] + comparison_df['Linear Rank']) / 2
+                    comparison_df = comparison_df.sort_values('Average Rank')
+                    
+                    print("Feature importance comparison (Top 20 by average rank):")
+                    print(comparison_df.head(20))
+                    
+                    # Print features with largest disagreement
+                    print("\nFeatures with largest disagreement in importance ranking:")
+                    disagreement_df = comparison_df.sort_values('Rank Difference', ascending=False).head(10)
+                    print(disagreement_df)
+                    
+                    # Visualize rank comparison for top features
+                    try:
+                        plt.figure(figsize=(14, 10))
+                        
+                        # Select top 20 features by average rank
+                        top_features = comparison_df.head(20)['Feature'].tolist()
+                        
+                        # Create DataFrame in format for plotting
+                        plot_data = []
+                        for feature in top_features:
+                            row = comparison_df[comparison_df['Feature'] == feature].iloc[0]
+                            plot_data.append({
+                                'Feature': feature,
+                                'Model': 'Tree-based',
+                                'Rank': row['Tree-based Rank']
+                            })
+                            plot_data.append({
+                                'Feature': feature,
+                                'Model': 'Linear',
+                                'Rank': row['Linear Rank']
+                            })
+                        
+                        plot_df = pd.DataFrame(plot_data)
+                        
+                        # Plot
+                        plt.figure(figsize=(10, 12))
+                        ax = sns.barplot(x='Rank', y='Feature', hue='Model', data=plot_df)
+                        plt.title('Feature Importance Rank Comparison (Lower is Better)')
+                        plt.xlabel('Rank')
+                        plt.ylabel('Feature')
+                        plt.legend(title='Model Type')
+                        
+                        # Invert x-axis so that most important features (rank 1) are on the right
+                        ax.invert_xaxis()
+                        
+                        plt.tight_layout()
+                        plt.show()
+                        
+                    except Exception as e:
+                        print(f"Error plotting rank comparison: {e}")
+                
+            else:
+                print("\nImportance comparison skipped as only one model type is available.")
+                
         except Exception as e:
             print(f"Error in feature importance calculation: {e}")
+            import traceback
+            traceback.print_exc()
     
     def run_full_analysis(self):
         """Run all analysis methods in sequence."""

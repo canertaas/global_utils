@@ -1,12 +1,14 @@
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score, 
     roc_auc_score, confusion_matrix, classification_report, 
-    precision_recall_curve, roc_curve, auc
+    precision_recall_curve, roc_curve, auc, brier_score_loss
 )
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
 import os
+import numpy as np
+from sklearn.calibration import calibration_curve
 
 class ModelMetrics:
     """
@@ -42,11 +44,49 @@ class ModelMetrics:
             'classification_report': classification_report(y_true, y_pred)
         }
         
-        # Add ROC-AUC if probabilities are provided
+        # Add ROC-AUC and Brier Score if probabilities are provided
         if y_pred_proba is not None:
-            metrics['roc_auc'] = roc_auc_score(y_true, y_pred_proba)
+            try:
+                metrics['roc_auc'] = roc_auc_score(y_true, y_pred_proba)
+                
+                # Add Brier Score for binary classification
+                if len(np.unique(y_true)) == 2:
+                    # Ensure we have probabilities for the positive class
+                    if isinstance(y_pred_proba, np.ndarray) and y_pred_proba.ndim == 2:
+                        y_pred_proba_pos = y_pred_proba[:, 1]
+                    else:
+                        y_pred_proba_pos = y_pred_proba
+                    
+                    metrics['brier_score'] = brier_score_loss(y_true, y_pred_proba_pos)
+            except Exception as e:
+                print(f"Error calculating probability-based metrics: {str(e)}")
         
         return metrics
+    
+    @staticmethod
+    def get_scorer(metric_name):
+        """
+        Get a scorer function for the specified metric.
+        
+        Parameters:
+        -----------
+        metric_name : str
+            Name of the metric ('accuracy', 'precision', 'recall', 'f1', 'roc_auc', 'brier_score')
+            
+        Returns:
+        --------
+        callable or str
+            Scorer function or name for scikit-learn
+        """
+        from sklearn.metrics import make_scorer
+        
+        if metric_name == 'brier_score':
+            # Note: we use negative brier_score because sklearn optimizes for higher values
+            # but brier_score is better when lower
+            return make_scorer(lambda y, y_pred: -brier_score_loss(y, y_pred), needs_proba=True)
+        
+        # For other metrics, return the string name that scikit-learn recognizes
+        return metric_name
     
     @staticmethod
     def plot_confusion_matrix(y_true, y_pred, class_names=None, figsize=(10, 8), 
@@ -271,3 +311,45 @@ class ModelMetrics:
                 
         except Exception as e:
             print(f"Error in save_classification_report_visualization: {str(e)}")
+    
+    @staticmethod
+    def evaluate_calibration(y_true, y_pred_proba, n_bins=10):
+        """
+        Evaluate the calibration of probability predictions.
+        
+        Parameters:
+        -----------
+        y_true : array-like
+            True binary labels
+        y_pred_proba : array-like
+            Probability estimates for the positive class
+        n_bins : int, default=10
+            Number of bins for calibration curve
+            
+        Returns:
+        --------
+        dict
+            Dictionary with calibration metrics
+        """
+        try:
+            # Calculate calibration curve
+            prob_true, prob_pred = calibration_curve(y_true, y_pred_proba, n_bins=n_bins)
+            
+            # Calculate mean absolute calibration error
+            calibration_error = np.mean(np.abs(prob_true - prob_pred))
+            
+            # Calculate Brier score
+            brier_score = brier_score_loss(y_true, y_pred_proba)
+            
+            return {
+                'calibration_curve': {
+                    'prob_true': prob_true,
+                    'prob_pred': prob_pred
+                },
+                'calibration_error': calibration_error,
+                'brier_score': brier_score
+            }
+            
+        except Exception as e:
+            print(f"Error evaluating calibration: {str(e)}")
+            return None

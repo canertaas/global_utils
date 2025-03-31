@@ -1,8 +1,8 @@
 import numpy as np
-import matplotlib.pyplot as plt
 from sklearn.model_selection import (train_test_split, KFold, StratifiedKFold, GroupKFold, 
-                                     TimeSeriesSplit, cross_validate, cross_val_score)
+                                    TimeSeriesSplit, cross_validate, cross_val_score)
 from ..config import random_state as default_random_state
+from .utils import plot_cv_results, visualize_cv_splits
 
 class Validation:
     """
@@ -16,6 +16,7 @@ class Validation:
     - Group K-Fold cross-validation
     - Time Series cross-validation
     - Custom validation strategies
+    - Combinatorial Purged Group K-Fold cross-validation
     
     It also provides visualization tools for cross-validation results.
     """
@@ -164,170 +165,210 @@ class Validation:
         return X_train, X_test, y_train, y_test
     
     @staticmethod
-    def k_fold_cross_validation(X, y, model, n_splits=5, random_state=default_random_state, scoring='accuracy'):
+    def k_fold_cross_validation(X, y, model=None, n_splits=5, random_state=default_random_state, 
+                               scoring=None, return_estimator=False, return_train_score=True):
         """
-        Perform K-Fold cross-validation.
+        Create a KFold cross-validator or perform K-Fold cross-validation.
         
         Parameters:
         -----------
-        X : array-like
-            Features
-        y : array-like
-            Target variable
-        model : estimator object
-            The model to evaluate
+        X : array-like or None
+            Features. If None, returns only the cross-validator object.
+        y : array-like or None
+            Target variable. If None, returns only the cross-validator object.
+        model : estimator object, default=None
+            The model to evaluate. If None, returns only the cross-validator object.
         n_splits : int, default=5
             Number of folds
         random_state : int, default=None
             Controls the randomness of the CV splitter
-        scoring : str or callable, default='accuracy'
+        scoring : str, callable, or None, default=None
             Scoring metric to use
+        return_estimator : bool, default=False
+            Whether to return the fitted estimator objects
+        return_train_score : bool, default=True
+            Whether to return training scores
             
         Returns:
         --------
-        dict
-            Cross-validation results
+        If model is None:
+            cv : KFold object
+                The KFold cross-validator
+        Else:
+            results : dict
+                Cross-validation results
         """
         # Create KFold object
-        kf = KFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+        cv = KFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+        
+        # If no model provided, return the cv object
+        if model is None:
+            return cv
         
         # Perform cross-validation
         cv_results = cross_validate(
-            model, X, y, cv=kf, scoring=scoring, 
-            return_train_score=True, return_estimator=True
+            model, X, y, cv=cv, scoring=scoring, 
+            return_train_score=return_train_score,
+            return_estimator=return_estimator
         )
         
         return cv_results
     
     @staticmethod
-    def get_stratified_k_fold(n_splits=5, random_state=None):
+    def stratified_k_fold_cross_validation(X, y, model=None, n_splits=5, random_state=default_random_state, 
+                                         scoring=None, return_estimator=False, return_train_score=True):
         """
-        Returns a StratifiedKFold cross-validator object for use with RandomizedSearchCV
+        Create a StratifiedKFold cross-validator or perform stratified k-fold cross-validation.
         
         Parameters:
         -----------
+        X : array-like or None
+            Features. If None, returns only the cross-validator object.
+        y : array-like or None
+            Target variable. If None, returns only the cross-validator object.
+        model : estimator object, default=None
+            The model to evaluate. If None, returns only the cross-validator object.
         n_splits : int, default=5
             Number of folds
         random_state : int, default=None
-            Random seed for reproducibility
+            Controls the randomness of the CV splitter
+        scoring : str, callable, or None, default=None
+            Scoring metric to use
+        return_estimator : bool, default=False
+            Whether to return the fitted estimator objects
+        return_train_score : bool, default=True
+            Whether to return training scores
             
         Returns:
         --------
-        cv : StratifiedKFold
-            Cross-validator object
+        If model is None:
+            cv : StratifiedKFold object
+                The StratifiedKFold cross-validator
+        Else:
+            results : dict
+                Cross-validation results
         """
-        return StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
-    
-    @staticmethod
-    def stratified_k_fold_cross_validation(model, X, y, n_splits=5, random_state=None, scoring=None):
-        """
-        Perform stratified k-fold cross-validation
-        
-        Parameters:
-        -----------
-        model : estimator
-            The model to evaluate
-        X : array-like
-            Features
-        y : array-like
-            Target
-        n_splits : int, default=5
-            Number of folds
-        random_state : int, default=None
-            Random seed for reproducibility
-        scoring : str, default=None
-            Scoring metric
-            
-        Returns:
-        --------
-        dict
-            Dictionary with cross-validation results
-        """
+        # Create StratifiedKFold object
         cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
-        scores = cross_val_score(model, X, y, cv=cv, scoring=scoring)
         
-        return {
-            'test_score': scores,
-            'mean_test_score': scores.mean(),
-            'std_test_score': scores.std()
-        }
+        # If no model provided, return the cv object
+        if model is None or X is None or y is None:
+            return cv
+        
+        # Perform cross-validation
+        cv_results = cross_validate(
+            model, X, y, cv=cv, scoring=scoring, 
+            return_train_score=return_train_score,
+            return_estimator=return_estimator
+        )
+        
+        return cv_results
     
     @staticmethod
-    def group_k_fold_cross_validation(X, y, groups, model, n_splits=5, scoring='accuracy'):
+    def group_k_fold_cross_validation(X, y, groups, model=None, n_splits=5, 
+                                     scoring=None, return_estimator=False, return_train_score=True):
         """
-        Perform Group K-Fold cross-validation.
+        Create a GroupKFold cross-validator or perform Group K-Fold cross-validation.
         
         Parameters:
         -----------
-        X : array-like
-            Features
-        y : array-like
-            Target variable
+        X : array-like or None
+            Features. If None, returns only the cross-validator object.
+        y : array-like or None
+            Target variable. If None, returns only the cross-validator object.
         groups : array-like
             Group labels for the samples
-        model : estimator object
-            The model to evaluate
+        model : estimator object, default=None
+            The model to evaluate. If None, returns only the cross-validator object.
         n_splits : int, default=5
             Number of folds
-        scoring : str or callable, default='accuracy'
+        scoring : str, callable, or None, default=None
             Scoring metric to use
+        return_estimator : bool, default=False
+            Whether to return the fitted estimator objects
+        return_train_score : bool, default=True
+            Whether to return training scores
             
         Returns:
         --------
-        dict
-            Cross-validation results
+        If model is None:
+            cv : GroupKFold object
+                The GroupKFold cross-validator
+        Else:
+            results : dict
+                Cross-validation results
         """
         # Create GroupKFold object
-        gkf = GroupKFold(n_splits=n_splits)
+        cv = GroupKFold(n_splits=n_splits)
+        
+        # If no model provided, return the cv object
+        if model is None or X is None or y is None:
+            return cv
         
         # Perform cross-validation
         cv_results = cross_validate(
-            model, X, y, cv=gkf, groups=groups, scoring=scoring, 
-            return_train_score=True, return_estimator=True
+            model, X, y, cv=cv, groups=groups, scoring=scoring, 
+            return_train_score=return_train_score,
+            return_estimator=return_estimator
         )
         
         return cv_results
     
     @staticmethod
-    def time_series_cross_validation(X, y, model, n_splits=5, test_size=None, gap=0, scoring='accuracy'):
+    def time_series_cross_validation(X, y, model=None, n_splits=5, test_size=None, gap=0, 
+                                    scoring=None, return_estimator=False, return_train_score=True):
         """
-        Perform Time Series cross-validation.
+        Create a TimeSeriesSplit cross-validator or perform Time Series cross-validation.
         
         Parameters:
         -----------
-        X : array-like
-            Features
-        y : array-like
-            Target variable
-        model : estimator object
-            The model to evaluate
+        X : array-like or None
+            Features. If None, returns only the cross-validator object.
+        y : array-like or None
+            Target variable. If None, returns only the cross-validator object.
+        model : estimator object, default=None
+            The model to evaluate. If None, returns only the cross-validator object.
         n_splits : int, default=5
             Number of splits
         test_size : int, default=None
             Number of samples in each test set
         gap : int, default=0
             Number of samples to exclude from the end of each train set before the test set
-        scoring : str or callable, default='accuracy'
+        scoring : str, callable, or None, default=None
             Scoring metric to use
+        return_estimator : bool, default=False
+            Whether to return the fitted estimator objects
+        return_train_score : bool, default=True
+            Whether to return training scores
             
         Returns:
         --------
-        dict
-            Cross-validation results
+        If model is None:
+            cv : TimeSeriesSplit object
+                The TimeSeriesSplit cross-validator
+        Else:
+            results : dict
+                Cross-validation results
         """
         # Create TimeSeriesSplit object
-        tscv = TimeSeriesSplit(n_splits=n_splits, test_size=test_size, gap=gap)
+        cv = TimeSeriesSplit(n_splits=n_splits, test_size=test_size, gap=gap)
+        
+        # If no model provided, return the cv object
+        if model is None or X is None or y is None:
+            return cv
         
         # Perform cross-validation
         cv_results = cross_validate(
-            model, X, y, cv=tscv, scoring=scoring, 
-            return_train_score=True, return_estimator=True
+            model, X, y, cv=cv, scoring=scoring, 
+            return_train_score=return_train_score,
+            return_estimator=return_estimator
         )
         
         return cv_results
     
     @staticmethod
-    def custom_cross_validation(X, y, model, cv, scoring='accuracy', groups=None):
+    def custom_cross_validation(X, y, model, cv, scoring=None, groups=None, 
+                              return_estimator=False, return_train_score=True):
         """
         Perform custom cross-validation.
         
@@ -341,10 +382,14 @@ class Validation:
             The model to evaluate
         cv : cross-validation generator or iterable
             Determines the cross-validation splitting strategy
-        scoring : str or callable, default='accuracy'
+        scoring : str, callable, or None, default=None
             Scoring metric to use
         groups : array-like, default=None
             Group labels for the samples
+        return_estimator : bool, default=False
+            Whether to return the fitted estimator objects
+        return_train_score : bool, default=True
+            Whether to return training scores
             
         Returns:
         --------
@@ -354,13 +399,15 @@ class Validation:
         # Perform cross-validation
         cv_results = cross_validate(
             model, X, y, cv=cv, groups=groups, scoring=scoring, 
-            return_train_score=True, return_estimator=True
+            return_train_score=return_train_score,
+            return_estimator=return_estimator
         )
         
         return cv_results
     
     @staticmethod
-    def multi_metric_cross_validation(X, y, model, cv=5, scoring=None, groups=None):
+    def multi_metric_cross_validation(X, y, model, cv=5, scoring=None, groups=None,
+                                    return_estimator=False, return_train_score=True):
         """
         Perform cross-validation with multiple metrics.
         
@@ -378,6 +425,10 @@ class Validation:
             Scoring metrics to use
         groups : array-like, default=None
             Group labels for the samples
+        return_estimator : bool, default=False
+            Whether to return the fitted estimator objects
+        return_train_score : bool, default=True
+            Whether to return training scores
             
         Returns:
         --------
@@ -397,185 +448,31 @@ class Validation:
         # Perform cross-validation
         cv_results = cross_validate(
             model, X, y, cv=cv, groups=groups, scoring=scoring, 
-            return_train_score=True, return_estimator=True
+            return_train_score=return_train_score,
+            return_estimator=return_estimator
         )
         
         return cv_results
     
     @staticmethod
     def plot_cv_results(cv_results, title='Cross-Validation Results', figsize=(12, 6)):
-        """
-        Plot cross-validation results.
-        
-        Parameters:
-        -----------
-        cv_results : dict
-            Cross-validation results from cross_validate
-        title : str, default='Cross-Validation Results'
-            Plot title
-        figsize : tuple, default=(12, 6)
-            Figure size
-        """
-        # Extract metrics
-        metrics = [key.replace('test_', '') for key in cv_results.keys() 
-                  if key.startswith('test_') and key != 'test_score']
-        
-        if not metrics:
-            metrics = ['score']
-        
-        # Create figure
-        fig, axes = plt.subplots(1, len(metrics), figsize=figsize)
-        if len(metrics) == 1:
-            axes = [axes]
-        
-        # Plot each metric
-        for i, metric in enumerate(metrics):
-            train_scores = cv_results.get(f'train_{metric}', cv_results.get('train_score', []))
-            test_scores = cv_results.get(f'test_{metric}', cv_results.get('test_score', []))
-            
-            # Calculate mean and std
-            train_mean = np.mean(train_scores)
-            train_std = np.std(train_scores)
-            test_mean = np.mean(test_scores)
-            test_std = np.std(test_scores)
-            
-            # Plot
-            axes[i].bar([0, 1], [train_mean, test_mean], yerr=[train_std, test_std], 
-                       capsize=10, color=['blue', 'orange'])
-            axes[i].set_xticks([0, 1])
-            axes[i].set_xticklabels(['Train', 'Test'])
-            axes[i].set_ylabel(f'{metric.capitalize()} Score')
-            axes[i].set_title(f'{metric.capitalize()} (Mean ± Std)')
-            
-            # Add text
-            axes[i].text(0, train_mean, f'{train_mean:.4f}±{train_std:.4f}', 
-                        ha='center', va='bottom')
-            axes[i].text(1, test_mean, f'{test_mean:.4f}±{test_std:.4f}', 
-                        ha='center', va='bottom')
-        
-        # Set title
-        fig.suptitle(title, fontsize=16)
-        plt.tight_layout(rect=[0, 0, 1, 0.95])
-        plt.show()
-    
-    @staticmethod
-    def plot_learning_curve(estimator, X, y, cv=5, train_sizes=np.linspace(0.1, 1.0, 5),
-                           scoring='accuracy', n_jobs=None, figsize=(10, 6)):
-        """
-        Plot learning curve.
-        
-        Parameters:
-        -----------
-        estimator : estimator object
-            The model to evaluate
-        X : array-like
-            Features
-        y : array-like
-            Target variable
-        cv : int, cross-validation generator or iterable, default=5
-            Determines the cross-validation splitting strategy
-        train_sizes : array-like, default=np.linspace(0.1, 1.0, 5)
-            Relative or absolute numbers of training examples
-        scoring : str or callable, default='accuracy'
-            Scoring metric to use
-        n_jobs : int, default=None
-            Number of jobs to run in parallel
-        figsize : tuple, default=(10, 6)
-            Figure size
-        """
-        from sklearn.model_selection import learning_curve
-        
-        # Calculate learning curve
-        train_sizes, train_scores, test_scores = learning_curve(
-            estimator, X, y, cv=cv, n_jobs=n_jobs,
-            train_sizes=train_sizes, scoring=scoring
-        )
-        
-        # Calculate mean and std
-        train_mean = np.mean(train_scores, axis=1)
-        train_std = np.std(train_scores, axis=1)
-        test_mean = np.mean(test_scores, axis=1)
-        test_std = np.std(test_scores, axis=1)
-        
-        # Plot
-        plt.figure(figsize=figsize)
-        plt.title(f'Learning Curve ({scoring})')
-        plt.xlabel('Training examples')
-        plt.ylabel(f'{scoring.capitalize()} score')
-        plt.grid()
-        
-        plt.fill_between(train_sizes, train_mean - train_std,
-                         train_mean + train_std, alpha=0.1, color='blue')
-        plt.fill_between(train_sizes, test_mean - test_std,
-                         test_mean + test_std, alpha=0.1, color='orange')
-        plt.plot(train_sizes, train_mean, 'o-', color='blue', label='Training score')
-        plt.plot(train_sizes, test_mean, 'o-', color='orange', label='Cross-validation score')
-        
-        plt.legend(loc='best')
-        plt.show()
-    
-    @staticmethod
-    def plot_validation_curve(estimator, X, y, param_name, param_range, cv=5,
-                             scoring='accuracy', n_jobs=None, figsize=(10, 6)):
-        """
-        Plot validation curve.
-        
-        Parameters:
-        -----------
-        estimator : estimator object
-            The model to evaluate
-        X : array-like
-            Features
-        y : array-like
-            Target variable
-        param_name : str
-            Name of the parameter to vary
-        param_range : array-like
-            Range of values for the parameter
-        cv : int, cross-validation generator or iterable, default=5
-            Determines the cross-validation splitting strategy
-        scoring : str or callable, default='accuracy'
-            Scoring metric to use
-        n_jobs : int, default=None
-            Number of jobs to run in parallel
-        figsize : tuple, default=(10, 6)
-            Figure size
-        """
-        from sklearn.model_selection import validation_curve
-        
-        # Calculate validation curve
-        train_scores, test_scores = validation_curve(
-            estimator, X, y, param_name=param_name, param_range=param_range,
-            cv=cv, scoring=scoring, n_jobs=n_jobs
-        )
-        
-        # Calculate mean and std
-        train_mean = np.mean(train_scores, axis=1)
-        train_std = np.std(train_scores, axis=1)
-        test_mean = np.mean(test_scores, axis=1)
-        test_std = np.std(test_scores, axis=1)
-        
-        # Plot
-        plt.figure(figsize=figsize)
-        plt.title(f'Validation Curve ({scoring})')
-        plt.xlabel(param_name)
-        plt.ylabel(f'{scoring.capitalize()} score')
-        plt.grid()
-        
-        plt.fill_between(param_range, train_mean - train_std,
-                         train_mean + train_std, alpha=0.1, color='blue')
-        plt.fill_between(param_range, test_mean - test_std,
-                         test_mean + test_std, alpha=0.1, color='orange')
-        plt.plot(param_range, train_mean, 'o-', color='blue', label='Training score')
-        plt.plot(param_range, test_mean, 'o-', color='orange', label='Cross-validation score')
-        
-        plt.legend(loc='best')
-        plt.show()
+        """Plot cross-validation results."""
+        return plot_cv_results(cv_results, title, figsize)
     
     @staticmethod
     def visualize_cv_splits(X, y, cv, groups=None, figsize=(12, 6)):
+        """Visualize cross-validation splits."""
+        return visualize_cv_splits(X, y, cv, groups, figsize)
+    
+    @staticmethod
+    def combinatorial_purged_group_k_fold(X, y, groups, n_splits=5, group_gap=0, embargo_pct=0.0):
         """
-        Visualize cross-validation splits.
+        Generate indices for Combinatorial Purged Group K-Fold cross-validation.
+        
+        This cross-validation strategy:
+        1. Ensures no data leakage between training and test sets
+        2. Implements purging (removing samples before/after test set)
+        3. Implements embargoing (removing samples from the end of training)
         
         Parameters:
         -----------
@@ -583,43 +480,144 @@ class Validation:
             Features
         y : array-like
             Target variable
-        cv : cross-validation generator
-            The cross-validation splitter to visualize
-        groups : array-like, default=None
-            Group labels for the samples
-        figsize : tuple, default=(12, 6)
-            Figure size
+        groups : array-like
+            Group labels for samples
+        n_splits : int, default=5
+            Number of folds
+        group_gap : int, default=0
+            Number of groups to purge between train and test sets
+        embargo_pct : float, default=0.0
+            Percentage of samples to embargo from the end of training set
+        
+        Yields:
+        -------
+        train_idx : ndarray
+            Training set indices for each split
+        test_idx : ndarray
+            Test set indices for each split
         """
-        # Create figure
-        plt.figure(figsize=figsize)
+        if groups is None:
+            raise ValueError("Groups parameter must be provided")
         
-        # Get splits
-        n_splits = getattr(cv, 'n_splits', 5)
-        splits = list(cv.split(X, y, groups))
+        groups = np.asarray(groups)
+        unique_groups = np.unique(groups)
+        n_groups = len(unique_groups)
         
-        # Create matrix to visualize splits
-        n_samples = len(X)
-        matrix = np.zeros((n_splits, n_samples))
+        if n_splits > n_groups:
+            raise ValueError(f"Cannot have more splits ({n_splits}) than groups ({n_groups})")
         
-        # Fill matrix
-        for i, (train_idx, test_idx) in enumerate(splits):
-            matrix[i, train_idx] = 1  # Training samples
-            matrix[i, test_idx] = 2   # Test samples
+        # Calculate fold size
+        fold_size = n_groups // n_splits
         
-        # Plot
-        plt.imshow(matrix, interpolation='nearest', cmap=plt.cm.viridis)
-        plt.yticks(np.arange(n_splits), [f'Split {i+1}' for i in range(n_splits)])
-        plt.xlabel('Sample index')
+        # Generate test group indices for each fold
+        indices = np.arange(n_groups)
+        test_starts = indices[::fold_size][:n_splits]
         
-        # Add legend
-        from matplotlib.patches import Patch
-        legend_elements = [
-            Patch(facecolor=plt.cm.viridis(0.33), label='Training set'),
-            Patch(facecolor=plt.cm.viridis(0.66), label='Test set')
-        ]
-        plt.legend(handles=legend_elements, loc='upper center', bbox_to_anchor=(0.5, 1.15),
-                  ncol=2)
+        for fold_start in test_starts:
+            # Define test groups
+            fold_end = fold_start + fold_size
+            test_groups = unique_groups[fold_start:fold_end]
+            
+            # Create test mask
+            test_mask = np.isin(groups, test_groups)
+            test_indices = np.where(test_mask)[0]
+            
+            # Define train groups (excluding purged and test groups)
+            purged_groups = []
+            for test_group in test_groups:
+                purged_groups.extend(range(
+                    max(0, test_group - group_gap),
+                    min(n_groups, test_group + group_gap + 1)
+                ))
+            
+            train_groups = [g for g in unique_groups if g not in purged_groups]
+            train_mask = np.isin(groups, train_groups)
+            
+            # Apply embargo if requested
+            if embargo_pct > 0:
+                n_embargo = int(len(test_groups) * embargo_pct)
+                embargo_groups = np.zeros(n_groups, dtype=bool)
+                for test_group in test_groups:
+                    embargo_groups[max(0, test_group - n_embargo):test_group] = True
+                embargo_mask = embargo_groups[groups]
+                train_mask &= ~embargo_mask
+            
+            train_indices = np.where(train_mask)[0]
+            
+            yield train_indices, test_indices
+    
+    @staticmethod
+    def combinatorial_purged_group_k_fold_cross_validation(X, y, groups, model=None, n_splits=5, 
+                                                          group_gap=0, embargo_pct=0.0, 
+                                                          scoring=None, return_estimator=False, 
+                                                          return_train_score=True):
+        """
+        Create a Combinatorial Purged Group K-Fold cross-validator or perform cross-validation.
         
-        plt.title('Cross-validation splits')
-        plt.tight_layout()
-        plt.show()
+        Parameters:
+        -----------
+        X : array-like or None
+            Features. If None, returns a generator function for splits.
+        y : array-like or None
+            Target variable. If None, returns a generator function for splits.
+        groups : array-like
+            Group labels for samples
+        model : estimator object, default=None
+            The model to evaluate. If None, returns only the cross-validator.
+        n_splits : int, default=5
+            Number of folds
+        group_gap : int, default=0
+            Number of groups to purge between train and test sets
+        embargo_pct : float, default=0.0
+            Percentage of samples to embargo from the end of training set
+        scoring : str, callable, or None, default=None
+            Scoring metric to use
+        return_estimator : bool, default=False
+            Whether to return the fitted estimator objects
+        return_train_score : bool, default=True
+            Whether to return training scores
+        
+        Returns:
+        --------
+        If model is None:
+            cv_generator : generator
+                Generator yielding train and test indices
+        Else:
+            dict
+                Cross-validation results containing:
+                - test_score: Array of scores for each fold
+                - mean_test_score: Mean score across folds
+                - std_test_score: Standard deviation of scores
+        """
+        # Create CV splitter function
+        cv = Validation.combinatorial_purged_group_k_fold(
+            X, y, groups, 
+            n_splits=n_splits, 
+            group_gap=group_gap, 
+            embargo_pct=embargo_pct
+        )
+        
+        # If no model, return the cross-validator
+        if model is None:
+            return cv
+        
+        # Convert generator to list for cross_val_score
+        cv_list = list(cv)
+        
+        if return_estimator or return_train_score:
+            # If we need to return estimators or train scores, use cross_validate
+            cv_results = cross_validate(
+                model, X, y, cv=cv_list, scoring=scoring,
+                return_estimator=return_estimator,
+                return_train_score=return_train_score
+            )
+            return cv_results
+        else:
+            # Otherwise use cross_val_score which is simpler
+            scores = cross_val_score(model, X, y, cv=cv_list, scoring=scoring)
+            
+            return {
+                'test_score': scores,
+                'mean_test_score': scores.mean(),
+                'std_test_score': scores.std()
+            }

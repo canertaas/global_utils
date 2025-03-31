@@ -14,10 +14,12 @@ import lightgbm as lgb
 from catboost import CatBoostClassifier
 from sklearn.base import clone
 from sklearn.model_selection import RandomizedSearchCV
+from sklearn.calibration import CalibratedClassifierCV
 from ..config import random_state, classification_params, default_classification_settings
-from ..validation.validation import Validation
+from ..validation.get_validation import GetValidation
 from ..metric.classification_metric import ModelMetrics
 from ..utils import create_output_directories
+from .utils import plot_calibration_comparison, save_calibration_metrics
 from ..model.explain import ModelExplainer
 
 
@@ -31,7 +33,11 @@ class ClassificationModels:
     - Model comparison
     """
     
-    def __init__(self, scoring, validation_strategy=None, output_dir="model_outputs"): # todo impliment different validation approaches
+    def __init__(self, 
+                 scoring=None, 
+                 validation_method='stratified_k_fold',
+                 validation_params=None, 
+                 output_dir="model_outputs"):
         """
         Initialize ClassificationModels
         
@@ -39,16 +45,30 @@ class ClassificationModels:
         -----------
         scoring : str, default=None
             Scoring metric for model evaluation
-        validation_strategy : str, default='k_fold'
-            Validation strategy to use
+        validation_method : str, default='stratified_k_fold'
+            Validation method to use. Options:
+            - 'train_test_split': Simple train-test split
+            - 'stratified_k_fold': Stratified K-Fold cross-validation
+            - 'k_fold': K-Fold cross-validation
+            - 'group_k_fold': Group K-Fold cross-validation 
+            - 'time_series': Time Series cross-validation
+            - 'combinatorial_purged': Combinatorial Purged Group K-Fold
         validation_params : dict, default=None
-            Parameters for the validation strategy
+            Parameters for the validation method
         output_dir : str, default="model_outputs"
             Directory to save model outputs and results
         """
-        # Use default settings if not provided
-        self.scoring = scoring or default_classification_settings['scoring']
-        self.validation_strategy = validation_strategy
+        # Use default settings if not provided, and get the appropriate scorer from ModelMetrics
+        self.scoring = ModelMetrics.get_scorer(scoring) or ModelMetrics.get_scorer(default_classification_settings['scoring'])
+        
+        # Set validation method and parameters
+        self.validation_method = validation_method
+        self.validation_params = validation_params or {}
+        
+        # Use default parameters from settings if not provided
+        for param, default_value in default_classification_settings.items():
+            if param not in self.validation_params:
+                self.validation_params[param] = default_value
         
         # Create time-stamped run directory
         self.output_dir = output_dir
@@ -106,15 +126,6 @@ class ClassificationModels:
         self.best_score = 0
         self.model_results = {}  
         
-    def _validate_data(self, X, y):
-        """Validate data based on validation strategy"""
-        return Validation.train_test_split(
-            X, y,
-            test_size=default_classification_settings['test_size'],
-            stratify=default_classification_settings['stratify'],
-            random_state=random_state
-        )
-    
     def save_classification_report(self, y_true, y_pred, model_name):
         """Save classification report as a visualization"""
         # Create model-specific directory for results
@@ -148,9 +159,98 @@ class ClassificationModels:
         except Exception as e:
             print(f"Error saving ROC curve for {model_name}: {str(e)}")
     
-    def train_model_with_validation(self, model_name, X, y, optimize=True, 
-                                  optimization_method=default_classification_settings['optimization_method']):
-        """Train a model with validation and store detailed results"""
+    def calibrate_model(self, model, X_train, y_train, X_val, y_val, model_name):
+        """Calibrate model probabilities using CalibratedClassifierCV."""
+        print(f"\nCalibrating probabilities for {model_name}...")
+        
+        # Create model-specific directory for calibration results
+        model_dir = os.path.join(self.results_dir, model_name)
+        os.makedirs(model_dir, exist_ok=True)
+        
+        # Get uncalibrated probabilities
+        try:
+            y_pred_proba_before = model.predict_proba(X_val)
+            y_pred_before = model.predict(X_val)
+            
+            # Calculate metrics before calibration
+            metrics_before = ModelMetrics.calculate_metrics(y_val, y_pred_before, y_pred_proba_before[:, 1] if y_pred_proba_before.ndim > 1 else y_pred_proba_before)
+            
+            # Calibrate the model - try both parameter names to handle different scikit-learn versions
+            try:
+                # For newer scikit-learn versions
+                calibrated_model = CalibratedClassifierCV(
+                    estimator=model,
+                    cv='prefit',  # Use the already fitted model
+                    method='sigmoid'  # Platt scaling
+                )
+            except TypeError:
+                # For older scikit-learn versions
+                calibrated_model = CalibratedClassifierCV(
+                    base_estimator=model,
+                    cv='prefit',  # Use the already fitted model
+                    method='sigmoid'  # Platt scaling
+                )
+            
+            calibrated_model.fit(X_train, y_train)
+            
+            # Get calibrated probabilities
+            y_pred_proba_after = calibrated_model.predict_proba(X_val)
+            y_pred_after = calibrated_model.predict(X_val)
+            
+            # Calculate metrics after calibration
+            metrics_after = ModelMetrics.calculate_metrics(y_val, y_pred_after, y_pred_proba_after[:, 1] if y_pred_proba_after.ndim > 1 else y_pred_proba_after)
+            
+            # Plot calibration curves
+            try:
+                plot_calibration_comparison(
+                    y_val, 
+                    [y_pred_proba_before[:, 1] if y_pred_proba_before.ndim > 1 else y_pred_proba_before,
+                     y_pred_proba_after[:, 1] if y_pred_proba_after.ndim > 1 else y_pred_proba_after],
+                    ['Before Calibration', 'After Calibration'],
+                    model_name,
+                    os.path.join(model_dir, f"{model_name}_calibration_curve.png")
+                )
+            except Exception as e:
+                print(f"Error plotting calibration curves: {str(e)}")
+            
+            # Save calibration improvement metrics
+            try:
+                save_calibration_metrics(metrics_before, metrics_after, model_name, model_dir)
+            except Exception as e:
+                print(f"Error saving calibration metrics: {str(e)}")
+            
+            return calibrated_model, metrics_before, metrics_after
+            
+        except Exception as e:
+            print(f"Error calibrating {model_name}: {str(e)}")
+            import traceback
+            traceback.print_exc()  # Print the full traceback for debugging
+            return model, None, None
+    
+    def train_model_with_validation(self, model_name, X, y, groups=None, optimize=True, calibrate=False):
+        """
+        Train a model with validation and store detailed results
+        
+        Parameters:
+        -----------
+        model_name : str
+            Name of the model to train
+        X : array-like
+            Features
+        y : array-like
+            Target variable
+        groups : array-like, default=None
+            Group labels for samples (for group-based validation methods)
+        optimize : bool, default=True
+            Whether to optimize hyperparameters
+        calibrate : bool, default=False
+            Whether to calibrate probabilities
+            
+        Returns:
+        --------
+        best_model, cv_results, metrics : tuple
+            The trained model, cross-validation results, and validation metrics
+        """
         try:
             model_info = self.models[model_name]
             model = model_info['model']
@@ -158,24 +258,30 @@ class ClassificationModels:
             # Get feature names if X is DataFrame
             feature_names = X.columns.tolist() if isinstance(X, pd.DataFrame) else None
             
-            # Split data if using train-test split
-            X_train, X_val, y_train, y_val = self._validate_data(X, y)
+            # Split data based on chosen validation strategy using GetValidation
+            X_train, X_val, y_train, y_val = GetValidation.validate_data(
+                X, y, groups, 
+                validation_method=self.validation_method,
+                validation_params=self.validation_params
+            )
     
             if optimize:
                 try:
-                    cv = Validation.get_stratified_k_fold(
-                        n_splits=default_classification_settings['n_splits'],
-                        random_state=random_state
+                    # Get cross-validator based on validation method using GetValidation
+                    cv = GetValidation.get_cross_validator(
+                        validation_method=self.validation_method,
+                        validation_params=self.validation_params,
+                        X=X, y=y, groups=groups
                     )
                     
                     search = RandomizedSearchCV(
                         model,
                         param_distributions=model_info['params'],
-                        n_iter=default_classification_settings['n_iter'],
+                        n_iter=self.validation_params.get('n_iter', 10),
                         cv=cv,
                         scoring=self.scoring,
                         random_state=random_state,
-                        n_jobs=default_classification_settings['n_jobs'],
+                        n_jobs=self.validation_params.get('n_jobs', -1),
                         error_score='raise',
                         return_train_score=True
                     )
@@ -190,21 +296,30 @@ class ClassificationModels:
                     print(f"Optimization failed for {model_name}: {str(e)}")
                     best_model = model
                     best_params = "Failed to optimize"
-                    best_model.fit(X_train, y_train)  # Silinen kodu geri ekledim
+                    best_model.fit(X_train, y_train)
                     cv_results = None
-                    cv_scores = np.array([0.0])  # Varsayılan boş skor
+                    cv_scores = np.array([0.0])  # Default empty score
             else:
                 best_model = model
                 best_model.fit(X_train, y_train)
                 best_params = "No optimization performed"
-                cv_results = None
-                cv_scores = Validation.stratified_k_fold_cross_validation(
-                    model=best_model, X=X_train, y=y_train, 
-                    n_splits=default_classification_settings['n_splits'],
-                    random_state=random_state,
+                
+                # Perform cross-validation based on validation method using GetValidation
+                cv_results = GetValidation.perform_cross_validation(
+                    model=best_model, 
+                    X=X_train, 
+                    y=y_train, 
+                    groups=groups,
+                    validation_method=self.validation_method,
+                    validation_params=self.validation_params,
                     scoring=self.scoring
                 )
-                cv_scores = cv_scores['test_score']
+                
+                # Extract scores from CV results
+                if isinstance(cv_results, dict) and 'test_score' in cv_results:
+                    cv_scores = cv_results['test_score']
+                else:
+                    cv_scores = np.array([0.0])  # Fallback if CV fails
             
             # Calculate metrics on validation set
             y_pred = best_model.predict(X_val if X_val is not None else X)
@@ -214,12 +329,44 @@ class ClassificationModels:
             try:
                 y_pred_proba = best_model.predict_proba(X_val if X_val is not None else X)
             except (AttributeError, ValueError, TypeError):
-                # AttributeError: Model has no predict_proba method
-                # ValueError: Wrong input shape or other value issues
-                # TypeError: Incompatible types
                 y_pred_proba = None
             
-            metrics = ModelMetrics.calculate_metrics(y_true, y_pred)
+            metrics = ModelMetrics.calculate_metrics(y_true, y_pred, y_pred_proba[:, 1] if y_pred_proba is not None and y_pred_proba.ndim > 1 else y_pred_proba)
+            
+            # Store detailed results - do this BEFORE calibration
+            self.model_results[model_name] = {
+                'model': best_model,
+                'best_params': best_params,
+                'cv_scores': cv_scores,
+                'cv_mean': np.mean(cv_scores),
+                'cv_std': np.std(cv_scores),
+                'validation_metrics': metrics,
+                'feature_names': feature_names
+            }
+            
+            # Calibrate model if requested and if it supports predict_proba
+            if calibrate and y_pred_proba is not None:
+                calibrated_model, metrics_before, metrics_after = self.calibrate_model(
+                    best_model, X_train, y_train, X_val, y_val, model_name
+                )
+                
+                # Update model and metrics if calibration was successful
+                if metrics_after is not None:
+                    best_model = calibrated_model
+                    metrics = metrics_after
+                    
+                    # Update stored model and metrics
+                    self.model_results[model_name]['model'] = best_model
+                    self.model_results[model_name]['validation_metrics'] = metrics
+                    self.model_results[model_name]['calibration_improvement'] = {
+                        'before': metrics_before,
+                        'after': metrics_after
+                    }
+                    
+                    # Save calibrated model
+                    model_path = os.path.join(self.models_dir, f"{model_name}_calibrated.joblib")
+                    joblib.dump(best_model, model_path)
+                    print(f"Saved calibrated {model_name} to: {model_path}")
             
             # Create model-specific directory for results
             model_dir = os.path.join(self.results_dir, model_name)
@@ -242,21 +389,17 @@ class ClassificationModels:
             # Save classification report visualization
             self.save_classification_report(y_true, y_pred, model_name)
             
-            # Store detailed results
-            self.model_results[model_name] = {
-                'model': best_model,
-                'best_params': best_params,
-                'cv_scores': cv_scores,
-                'cv_mean': np.mean(cv_scores),
-                'cv_std': np.std(cv_scores),
-                'validation_metrics': metrics,
-                'feature_names': feature_names
-            }
+            # Save the final model (calibrated or not)
+            model_path = os.path.join(self.models_dir, f"{model_name}.joblib")
+            joblib.dump(best_model, model_path)
+            print(f"Saved {model_name} to: {model_path}")
             
             return best_model, cv_results, metrics
             
         except Exception as e:
             print(f"Error training {model_name}: {str(e)}")
+            import traceback
+            traceback.print_exc()  # Print the full traceback for debugging
             return None, None, None
     
     def save_results_to_excel(self):
@@ -348,8 +491,32 @@ class ClassificationModels:
             except Exception as e:
                 print(f"Error refitting {model_name}: {str(e)}")
 
-    def classification_runner(self, X, y, optimize=True, models_to_train=None, refit_final=True):
-        """Runner function for the complete classification workflow"""
+    def classification_runner(self, X, y, groups=None, optimize=True, models_to_train=None, refit_final=True, calibrate=False):
+        """
+        Runner function for the complete classification workflow
+        
+        Parameters:
+        -----------
+        X : array-like
+            Features
+        y : array-like
+            Target variable
+        groups : array-like, default=None
+            Group labels for samples (for group-based validation methods)
+        optimize : bool, default=True
+            Whether to optimize hyperparameters
+        models_to_train : list, default=None
+            List of model names to train. If None, uses default from settings
+        refit_final : bool, default=True
+            Whether to refit models on full dataset after training
+        calibrate : bool, default=False
+            Whether to calibrate probabilities
+            
+        Returns:
+        --------
+        self : ClassificationModels
+            Returns self instance for method chaining
+        """
         
         # If the user does not provide a specific model list, use all available models by default
         if models_to_train is None:
@@ -359,7 +526,7 @@ class ClassificationModels:
         for model_name in models_to_train:
             print(f"Training {model_name}...")
             if model_name in self.models:  # Check if the model is valid
-                self.train_model_with_validation(model_name, X, y, optimize=optimize)
+                self.train_model_with_validation(model_name, X, y, groups, optimize=optimize, calibrate=calibrate)
             else:
                 print(f"Warning: {model_name} is not a valid model name. Skipping.")
             print(f"Training {model_name} completed.")

@@ -185,6 +185,136 @@ class Sampler(BaseEstimator, TransformerMixin):
         
         return X_resampled, y_resampled
     
+    def sample_by_groups(self, X, y, groups):
+        """
+        Performs sampling separately for each group.
+        
+        Parameters:
+        -----------
+        X: array-like, shape (n_samples, n_features)
+            Feature vectors.
+        
+        y: array-like, shape (n_samples,)
+            Target values.
+            
+        groups: array-like, shape (n_samples,)
+            Group labels for samples.
+            
+        Returns:
+        --------
+        X_resampled: array-like
+            Resampled feature vectors.
+            
+        y_resampled: array-like
+            Resampled target values.
+            
+        groups_resampled: array-like
+            Resampled group labels.
+        """
+        # Check input formats and convert to numpy arrays
+        X_np = np.array(X) if not isinstance(X, np.ndarray) else X
+        y_np = np.array(y) if not isinstance(y, np.ndarray) else y
+        groups_np = np.array(groups) if not isinstance(groups, np.ndarray) else groups
+        
+        # Unique groups
+        unique_groups = np.unique(groups_np)
+        
+        # Lists to collect resampled data
+        X_resampled_list = []
+        y_resampled_list = []
+        groups_resampled_list = []
+        
+        print(f"Sampling by groups: {len(unique_groups)} unique groups found")
+        
+        # Process each group separately
+        for group in unique_groups:
+            # Select data for current group
+            group_mask = groups_np == group
+            X_group = X_np[group_mask]
+            y_group = y_np[group_mask]
+            
+            # Check if we have enough samples for sampling
+            unique_classes, class_counts = np.unique(y_group, return_counts=True)
+            
+            # Skip tiny groups or groups with single class
+            if len(X_group) < 3 or len(unique_classes) < 2:
+                print(f"Group {group}: Too few samples ({len(X_group)}) or classes ({len(unique_classes)}), skipping sampling")
+                
+                # Keep original data for this group
+                X_resampled_list.append(X_group)
+                y_resampled_list.append(y_group)
+                groups_resampled_list.append(np.array([group] * len(X_group)))
+                continue
+            
+            try:
+                print(f"\nProcessing group {group}: {len(X_group)} samples")
+                
+                # Handle SMOTE for small groups
+                if self.method == 'smote':
+                    min_class_samples = min(class_counts)
+                    if min_class_samples <= self.k_neighbors:
+                        print(f"Warning: Group {group} has a class with only {min_class_samples} samples. "
+                              f"Reducing k_neighbors for SMOTE from {self.k_neighbors} to {max(1, min_class_samples-1)}")
+                        
+                        # Create a new sampler with adjusted k_neighbors
+                        temp_sampler = Sampler(
+                            method=self.method,
+                            scale_factor=self.scale_factor,
+                            class_ratio=self.class_ratio,
+                            random_state=self.random_state,
+                            k_neighbors=max(1, min_class_samples-1)
+                        )
+                        
+                        # Perform sampling
+                        X_group_resampled, y_group_resampled = temp_sampler.fit_resample(X_group, y_group)
+                    else:
+                        # Perform sampling with standard parameters
+                        X_group_resampled, y_group_resampled = self.fit_resample(X_group, y_group)
+                else:
+                    # For non-SMOTE methods
+                    X_group_resampled, y_group_resampled = self.fit_resample(X_group, y_group)
+                
+                # Create group labels for resampled data
+                groups_group_resampled = np.array([group] * len(X_group_resampled))
+                
+                # Append results
+                X_resampled_list.append(X_group_resampled)
+                y_resampled_list.append(y_group_resampled)
+                groups_resampled_list.append(groups_group_resampled)
+                
+            except Exception as e:
+                print(f"Error sampling group {group}: {str(e)}")
+                print("Keeping original data for this group")
+                
+                # Keep original data for this group on sampling error
+                X_resampled_list.append(X_group)
+                y_resampled_list.append(y_group)
+                groups_resampled_list.append(np.array([group] * len(X_group)))
+        
+        # Combine all resampled data
+        X_resampled_combined = np.vstack(X_resampled_list) if X_resampled_list else np.array([])
+        y_resampled_combined = np.concatenate(y_resampled_list) if y_resampled_list else np.array([])
+        groups_resampled_combined = np.concatenate(groups_resampled_list) if groups_resampled_list else np.array([])
+        
+        # Print overall results
+        print("\nOverall Sampling Results:")
+        print(f"Original dataset size: {len(y_np)} samples")
+        print(f"Resampled dataset size: {len(y_resampled_combined)} samples")
+        print(f"Original class distribution: {dict(zip(*np.unique(y_np, return_counts=True)))}")
+        print(f"Resampled class distribution: {dict(zip(*np.unique(y_resampled_combined, return_counts=True)))}")
+        
+        # Convert back to original format if X was a DataFrame
+        if isinstance(X, pd.DataFrame):
+            columns = X.columns
+            X_resampled_combined = pd.DataFrame(X_resampled_combined, columns=columns)
+        
+        # Convert back to original format if y was a Series
+        if isinstance(y, pd.Series):
+            name = y.name
+            y_resampled_combined = pd.Series(y_resampled_combined, name=name)
+        
+        return X_resampled_combined, y_resampled_combined, groups_resampled_combined
+    
     def fit(self, X, y=None):
         """Implements fit method for Transformer API compatibility."""
         return self
@@ -297,3 +427,54 @@ def scale_dataset(X, y, scale_factor=4.0, class_ratio=None, method='smote', rand
     )
     
     return sampler.fit_resample(X, y)
+
+
+def scale_dataset_by_groups(X, y, groups, scale_factor=4.0, class_ratio=None, method='smote', random_state=None):
+    """
+    Utility function to scale a dataset by groups.
+    
+    This function performs sampling separately for each group, which is useful when working
+    with grouped cross-validation strategies like GroupKFold.
+    
+    Parameters:
+    -----------
+    X: array-like
+        Feature vectors
+    
+    y: array-like
+        Target labels
+    
+    groups: array-like
+        Group labels for samples
+    
+    scale_factor: float, default=4.0
+        Factor to scale the dataset size
+    
+    class_ratio: float, dict or None, default=None
+        Target ratio for classes
+    
+    method: str, default='smote'
+        Sampling method to use: 'smote', 'random_oversampler', 'random_undersampler'
+    
+    random_state: int, default=None
+        Random seed for reproducibility
+    
+    Returns:
+    --------
+    X_scaled: array-like
+        Scaled feature vectors
+    
+    y_scaled: array-like
+        Scaled target labels
+        
+    groups_scaled: array-like
+        Group labels for the scaled data
+    """
+    sampler = Sampler(
+        method=method,
+        scale_factor=scale_factor,
+        class_ratio=class_ratio,
+        random_state=random_state
+    )
+    
+    return sampler.sample_by_groups(X, y, groups)
