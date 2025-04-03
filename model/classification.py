@@ -12,14 +12,11 @@ from sklearn.ensemble import GradientBoostingClassifier
 from xgboost import XGBClassifier
 import lightgbm as lgb
 from catboost import CatBoostClassifier
-from sklearn.base import clone
 from sklearn.model_selection import RandomizedSearchCV
-from sklearn.calibration import CalibratedClassifierCV
 from ..config import random_state, classification_params, default_classification_settings
 from ..validation.get_validation import GetValidation
 from ..metric.classification_metric import ModelMetrics
 from ..utils import create_output_directories
-from .utils import plot_calibration_comparison, save_calibration_metrics
 from ..model.explain import ModelExplainer
 
 
@@ -52,7 +49,6 @@ class ClassificationModels:
             - 'k_fold': K-Fold cross-validation
             - 'group_k_fold': Group K-Fold cross-validation 
             - 'time_series': Time Series cross-validation
-            - 'combinatorial_purged': Combinatorial Purged Group K-Fold
         validation_params : dict, default=None
             Parameters for the validation method
         output_dir : str, default="model_outputs"
@@ -159,75 +155,7 @@ class ClassificationModels:
         except Exception as e:
             print(f"Error saving ROC curve for {model_name}: {str(e)}")
     
-    def calibrate_model(self, model, X_train, y_train, X_val, y_val, model_name):
-        """Calibrate model probabilities using CalibratedClassifierCV."""
-        print(f"\nCalibrating probabilities for {model_name}...")
-        
-        # Create model-specific directory for calibration results
-        model_dir = os.path.join(self.results_dir, model_name)
-        os.makedirs(model_dir, exist_ok=True)
-        
-        # Get uncalibrated probabilities
-        try:
-            y_pred_proba_before = model.predict_proba(X_val)
-            y_pred_before = model.predict(X_val)
-            
-            # Calculate metrics before calibration
-            metrics_before = ModelMetrics.calculate_metrics(y_val, y_pred_before, y_pred_proba_before[:, 1] if y_pred_proba_before.ndim > 1 else y_pred_proba_before)
-            
-            # Calibrate the model - try both parameter names to handle different scikit-learn versions
-            try:
-                # For newer scikit-learn versions
-                calibrated_model = CalibratedClassifierCV(
-                    estimator=model,
-                    cv='prefit',  # Use the already fitted model
-                    method='sigmoid'  # Platt scaling
-                )
-            except TypeError:
-                # For older scikit-learn versions
-                calibrated_model = CalibratedClassifierCV(
-                    base_estimator=model,
-                    cv='prefit',  # Use the already fitted model
-                    method='sigmoid'  # Platt scaling
-                )
-            
-            calibrated_model.fit(X_train, y_train)
-            
-            # Get calibrated probabilities
-            y_pred_proba_after = calibrated_model.predict_proba(X_val)
-            y_pred_after = calibrated_model.predict(X_val)
-            
-            # Calculate metrics after calibration
-            metrics_after = ModelMetrics.calculate_metrics(y_val, y_pred_after, y_pred_proba_after[:, 1] if y_pred_proba_after.ndim > 1 else y_pred_proba_after)
-            
-            # Plot calibration curves
-            try:
-                plot_calibration_comparison(
-                    y_val, 
-                    [y_pred_proba_before[:, 1] if y_pred_proba_before.ndim > 1 else y_pred_proba_before,
-                     y_pred_proba_after[:, 1] if y_pred_proba_after.ndim > 1 else y_pred_proba_after],
-                    ['Before Calibration', 'After Calibration'],
-                    model_name,
-                    os.path.join(model_dir, f"{model_name}_calibration_curve.png")
-                )
-            except Exception as e:
-                print(f"Error plotting calibration curves: {str(e)}")
-            
-            # Save calibration improvement metrics
-            try:
-                save_calibration_metrics(metrics_before, metrics_after, model_name, model_dir)
-            except Exception as e:
-                print(f"Error saving calibration metrics: {str(e)}")
-            
-            return calibrated_model, metrics_before, metrics_after
-            
-        except Exception as e:
-            print(f"Error calibrating {model_name}: {str(e)}")
-            import traceback
-            traceback.print_exc()  # Print the full traceback for debugging
-            return model, None, None
-    
-    def train_model_with_validation(self, model_name, X, y, groups=None, optimize=True, calibrate=False):
+    def train_model_with_validation(self, model_name, X, y, groups=None, optimize=True):
         """
         Train a model with validation and store detailed results
         
@@ -243,8 +171,6 @@ class ClassificationModels:
             Group labels for samples (for group-based validation methods)
         optimize : bool, default=True
             Whether to optimize hyperparameters
-        calibrate : bool, default=False
-            Whether to calibrate probabilities
             
         Returns:
         --------
@@ -344,30 +270,6 @@ class ClassificationModels:
                 'feature_names': feature_names
             }
             
-            # Calibrate model if requested and if it supports predict_proba
-            if calibrate and y_pred_proba is not None:
-                calibrated_model, metrics_before, metrics_after = self.calibrate_model(
-                    best_model, X_train, y_train, X_val, y_val, model_name
-                )
-                
-                # Update model and metrics if calibration was successful
-                if metrics_after is not None:
-                    best_model = calibrated_model
-                    metrics = metrics_after
-                    
-                    # Update stored model and metrics
-                    self.model_results[model_name]['model'] = best_model
-                    self.model_results[model_name]['validation_metrics'] = metrics
-                    self.model_results[model_name]['calibration_improvement'] = {
-                        'before': metrics_before,
-                        'after': metrics_after
-                    }
-                    
-                    # Save calibrated model
-                    model_path = os.path.join(self.models_dir, f"{model_name}_calibrated.joblib")
-                    joblib.dump(best_model, model_path)
-                    print(f"Saved calibrated {model_name} to: {model_path}")
-            
             # Create model-specific directory for results
             model_dir = os.path.join(self.results_dir, model_name)
             os.makedirs(model_dir, exist_ok=True)
@@ -447,51 +349,8 @@ class ClassificationModels:
         df.to_csv(csv_path, index=False)
         
         return df
-    
-    def refit_with_full_data(self, X, y, model_names=None):
-        """Refit selected models with full dataset"""
-        if model_names is None:
-            model_names = list(self.model_results.keys())
-        
-        for model_name in model_names:
-            if model_name not in self.model_results:
-                continue
-                
-            try:
-                print(f"\nRefitting {model_name} with full dataset...")
-                original_model = self.model_results[model_name]['model']
-                
-                # Clone and refit
-                refitted_model = clone(original_model)
-                refitted_model.fit(X, y)
-                
-                # Save the refitted model
-                model_path = os.path.join(self.models_dir, f"{model_name}_final.joblib")
-                joblib.dump(refitted_model, model_path)
-                print(f"Saved refitted {model_name} to: {model_path}")
-                
-                # Update stored model
-                self.model_results[model_name]['final_model'] = refitted_model
-                
-                # Get feature names
-                feature_names = self.model_results[model_name].get('feature_names')
-                
-                # Generate model explanations for final model
-                final_model_name = f"{model_name}_final"
-                final_model_dir = os.path.join(self.results_dir, final_model_name)
-                os.makedirs(final_model_dir, exist_ok=True)
-                ModelExplainer.explain_model(
-                    refitted_model, 
-                    X, 
-                    final_model_name, 
-                    feature_names=feature_names, 
-                    output_dir=final_model_dir
-                )
-                
-            except Exception as e:
-                print(f"Error refitting {model_name}: {str(e)}")
 
-    def classification_runner(self, X, y, groups=None, optimize=True, models_to_train=None, refit_final=True, calibrate=False):
+    def classification_runner(self, X, y, groups=None, optimize=True, models_to_train=None):
         """
         Runner function for the complete classification workflow
         
@@ -507,10 +366,6 @@ class ClassificationModels:
             Whether to optimize hyperparameters
         models_to_train : list, default=None
             List of model names to train. If None, uses default from settings
-        refit_final : bool, default=True
-            Whether to refit models on full dataset after training
-        calibrate : bool, default=False
-            Whether to calibrate probabilities
             
         Returns:
         --------
@@ -526,17 +381,12 @@ class ClassificationModels:
         for model_name in models_to_train:
             print(f"Training {model_name}...")
             if model_name in self.models:  # Check if the model is valid
-                self.train_model_with_validation(model_name, X, y, groups, optimize=optimize, calibrate=calibrate)
+                self.train_model_with_validation(model_name, X, y, groups, optimize=optimize   )
             else:
                 print(f"Warning: {model_name} is not a valid model name. Skipping.")
             print(f"Training {model_name} completed.")
         
         # Save results
         self.save_results_to_excel()
-        
-        # Refit final models with full dataset if requested
-        if refit_final:
-            print("\nRefitting final models with full dataset...")
-            self.refit_with_full_data(X, y)
         
         return self

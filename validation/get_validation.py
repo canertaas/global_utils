@@ -200,15 +200,6 @@ def perform_cross_validation(model, X, y, groups=None, validation_method='strati
             scoring=scoring
         )
         
-    elif validation_method == 'combinatorial_purged' and groups is not None:
-        return Validation.combinatorial_purged_group_k_fold_cross_validation(
-            X=X, y=y, groups=groups, model=model,
-            n_splits=n_splits,
-            group_gap=validation_params.get('group_gap', 0),
-            embargo_pct=validation_params.get('embargo_pct', 0.0),
-            scoring=scoring
-        )
-        
     else:
         # Default to stratified k-fold
         return Validation.stratified_k_fold_cross_validation(

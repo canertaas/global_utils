@@ -521,7 +521,7 @@ class DatasetAnalyzer:
             import traceback
             traceback.print_exc()
     
-    def run_full_analysis(self):
+    def run_full_analysis(self, importance=True):
         """Run all analysis methods in sequence."""
         print("=" * 80)
         print("DATASET ANALYSIS REPORT")
@@ -551,7 +551,7 @@ class DatasetAnalyzer:
         print("-" * 80)
         self.categorical_analysis()
         
-        if self.target_col:
+        if self.target_col and importance:
             print("\n7. FEATURE IMPORTANCE")
             print("-" * 80)
             self.feature_importance()
